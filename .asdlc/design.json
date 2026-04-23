@@ -1,5 +1,5 @@
 {
-  "overview": "A cloud-native URL shortener with a React frontend (web-app), a Go backend API (service) for link management and redirection, and a scheduled cleanup task. The frontend calls the backend API to create and view links. The cleanup job periodically removes stale links based on last-access time.",
+  "overview": "A cloud-native URL shortener with a React frontend (web-app), a Go backend API (service) for link management and redirection, and a scheduled cleanup task. The frontend calls the backend API to create and view links. The cleanup job periodically removes stale links based on last-access time or user-defined expiry dates.",
   "requirements": [
     "Users can submit a long URL via web UI and receive a short link",
     "Users can submit a long URL via REST API and receive JSON with short link",
@@ -7,10 +7,11 @@
     "Short links track click count and last access time",
     "Automated deletion of links not accessed within a configurable period",
     "Users can view basic statistics (click count) for their short links",
+    "Users can set an expiry date on their short links",
     "All components expose /health endpoints for readiness checks",
     "Backend API listens on port 9090",
     "Frontend serves a single-page application",
-    "Cleanup job runs on a schedule (e.g. daily) to prune stale links"
+    "Cleanup job runs on a schedule (e.g. daily) to prune stale links and expired links"
   ],
   "components": [
     {
@@ -49,7 +50,18 @@
       "appPath": "/link-cleanup-job",
       "openAPISpec": "openapi: 3.0.3\ninfo:\n  title: Link Cleanup Job\n  version: 1.0.0\n  description: Scheduled task to delete stale short links\npaths:\n  /health:\n    get:\n      summary: Health check\n      responses:\n        '200':\n          description: Service is healthy\n          content:\n            application/json:\n              schema:\n                type: object\n                properties:\n                  status:\n                    type: string\n                    example: ok",
       "componentAgentInstructions": "Implement a Go command-line application that runs as a Kubernetes CronJob. The job calls the url-shortener-api backend to identify and delete stale links. Environment variable API_BASE_URL points to the backend (default http://url-shortener-api:9090). Environment variable STALE_DAYS defines the threshold (default 30 days). On execution: (1) GET /api/stats from a new endpoint on the backend that lists all links with their lastAccessed timestamps (you may need to extend the backend API or use a shared database). For simplicity, assume the backend exposes GET /api/admin/links returning JSON array of all links. (2) For each link where lastAccessed is older than STALE_DAYS, send DELETE /api/admin/links/{shortCode} to the backend. (3) Log the number of links deleted. Exit with code 0 on success. Dockerfile: multi-stage build with golang:1.21, copy binary to scratch or alpine. The binary is the entrypoint. No long-running HTTP server. For the /health endpoint requirement, include a minimal HTTP server on port 8080 that responds to GET /health with {\"status\":\"ok\"}, but the main logic is the cleanup task. Use a goroutine for the HTTP server and run cleanup in main, or structure as a CLI tool where health is optional. Since this is a CronJob, Kubernetes won't query /health during execution, so you may omit the HTTP server and just implement the cleanup logic. If required, add a simple HTTP server that starts, runs cleanup, then exits."
+    },
+    {
+      "name": "expiry-service",
+      "componentType": "service",
+      "language": "Go",
+      "dependsOn": [],
+      "entrypoint": "deployment/service",
+      "buildpack": "docker",
+      "appPath": "/expiry-service",
+      "openAPISpec": "openapi: 3.0.3\ninfo:\n  title: Expiry Service\n  version: 1.0.0\n  description: Service to manage expiry dates for short links\npaths:\n  /health:\n    get:\n      summary: Health check\n      responses:\n        '200':\n          description: Service is healthy\n          content:\n            application/json:\n              schema:\n                type: object\n                properties:\n                  status:\n                    type: string\n                    example: ok\n  /api/expiry/{shortCode}:\n    put:\n      summary: Set expiry date for a short link\n      parameters:\n        - name: shortCode\n          in: path\n          required: true\n          schema:\n            type: string\n      requestBody:\n        required: true\n        content:\n          application/json:\n            schema:\n              type: object\n              properties:\n                expiryDate:\n                  type: string\n                  format: date-time\n                  example: 2024-12-31T23:59:59Z\n              required:\n                - expiryDate\n      responses:\n        '200':\n          description: Expiry date set\n          content:\n            application/json:\n              schema:\n                type: object\n                properties:\n                  shortCode:\n                    type: string\n                    example: abc123\n                  expiryDate:\n                    type: string\n                    format: date-time\n                    example: 2024-12-31T23:59:59Z\n        '404':\n          description: Short code not found\n    get:\n      summary: Get expiry date for a short link\n      parameters:\n        - name: shortCode\n          in: path\n          required: true\n          schema:\n            type: string\n      responses:\n        '200':\n          description: Expiry date retrieved\n          content:\n            application/json:\n              schema:\n                type: object\n                properties:\n                  shortCode:\n                    type: string\n                    example: abc123\n                  expiryDate:\n                    type: string\n                    format: date-time\n                    example: 2024-12-31T23:59:59Z\n        '404':\n          description: Short code not found or no expiry set\n  /api/expiry/expired:\n    get:\n      summary: List all expired short codes\n      responses:\n        '200':\n          description: List of expired short codes\n          content:\n            application/json:\n              schema:\n                type: object\n                properties:\n                  expiredCodes:\n                    type: array\n                    items:\n                      type: string\n                    example:\n                      - abc123\n                      - def456",
+      "componentAgentInstructions": "Implement a Go HTTP service using net/http. Listen on port 9090. Use an in-memory map (sync.Map or mutex-protected map[string]time.Time) to store expiry dates keyed by shortCode. PUT /api/expiry/{shortCode}: parse JSON body containing expiryDate (ISO8601 string), validate the date is in the future, store the mapping shortCode -\u003e expiryDate, return JSON with shortCode and expiryDate. If shortCode does not exist in url-shortener-api (you may need to validate by calling GET /api/stats/{shortCode} on url-shortener-api or assume it exists), return 404. GET /api/expiry/{shortCode}: lookup the shortCode in the map, return JSON with shortCode and expiryDate if found, else 404. GET /api/expiry/expired: iterate the map, collect all shortCodes where expiryDate \u003c= time.Now(), return JSON array expiredCodes. GET /health: return {\"status\":\"ok\"} with 200. Use CORS middleware. Dockerfile: multi-stage build with golang:1.21 for build, scratch or alpine for runtime. Copy binary and expose port 9090. Set environment variable PORT=9090. Handle graceful shutdown on SIGTERM/SIGINT."
     }
   ],
-  "sourceSpec": "spec-v1"
+  "sourceSpec": "spec-v3"
 }
