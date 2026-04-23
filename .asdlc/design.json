@@ -1,0 +1,55 @@
+{
+  "overview": "A cloud-native URL shortener with a React frontend (web-app), a Go backend API (service) for link management and redirection, and a scheduled cleanup task. The frontend calls the backend API to create and view links. The cleanup job periodically removes stale links based on last-access time.",
+  "requirements": [
+    "Users can submit a long URL via web UI and receive a short link",
+    "Users can submit a long URL via REST API and receive JSON with short link",
+    "Visiting a short link redirects to the original long URL",
+    "Short links track click count and last access time",
+    "Automated deletion of links not accessed within a configurable period",
+    "Users can view basic statistics (click count) for their short links",
+    "All components expose /health endpoints for readiness checks",
+    "Backend API listens on port 9090",
+    "Frontend serves a single-page application",
+    "Cleanup job runs on a schedule (e.g. daily) to prune stale links"
+  ],
+  "components": [
+    {
+      "name": "url-shortener-ui",
+      "componentType": "web-app",
+      "language": "TypeScript / React",
+      "dependsOn": [
+        "url-shortener-api"
+      ],
+      "entrypoint": "deployment/web-application",
+      "buildpack": "docker",
+      "appPath": "/url-shortener-ui",
+      "openAPISpec": "openapi: 3.0.3\ninfo:\n  title: URL Shortener UI\n  version: 1.0.0\n  description: Frontend web application for URL shortener\npaths:\n  /health:\n    get:\n      summary: Health check\n      responses:\n        '200':\n          description: Service is healthy\n          content:\n            application/json:\n              schema:\n                type: object\n                properties:\n                  status:\n                    type: string\n                    example: ok",
+      "componentAgentInstructions": "Implement a React single-page application in TypeScript. Use Create React App or Vite as the build tool. The app has two main views: (1) a form to submit a long URL and display the resulting short link with a copy button, and (2) a view to display basic stats (click count) for a short link. On form submit, POST to /api/shorten on the backend (url-shortener-api) with JSON body {\"url\":\"https://example.com\"}. Display the returned short link prominently. For stats, GET /api/stats/:shortCode from the backend and show click count. Include a /health endpoint that returns {\"status\":\"ok\"} with 200 status. Use environment variable for backend API base URL (default http://localhost:9090). Dockerfile: multi-stage build with node:18 for build, nginx:alpine to serve static files. Copy build output to /usr/share/nginx/html. Expose port 80. Include nginx config for SPA routing (fallback to index.html)."
+    },
+    {
+      "name": "url-shortener-api",
+      "componentType": "service",
+      "language": "Go",
+      "dependsOn": [],
+      "entrypoint": "deployment/service",
+      "buildpack": "docker",
+      "appPath": "/url-shortener-api",
+      "openAPISpec": "openapi: 3.0.3\ninfo:\n  title: URL Shortener API\n  version: 1.0.0\n  description: Backend service for creating and resolving short links\npaths:\n  /health:\n    get:\n      summary: Health check\n      responses:\n        '200':\n          description: Service is healthy\n          content:\n            application/json:\n              schema:\n                type: object\n                properties:\n                  status:\n                    type: string\n                    example: ok\n  /api/shorten:\n    post:\n      summary: Create a short link\n      requestBody:\n        required: true\n        content:\n          application/json:\n            schema:\n              type: object\n              properties:\n                url:\n                  type: string\n                  format: uri\n                  example: https://example.com/very/long/path\n              required:\n                - url\n      responses:\n        '200':\n          description: Short link created\n          content:\n            application/json:\n              schema:\n                type: object\n                properties:\n                  shortCode:\n                    type: string\n                    example: abc123\n                  shortUrl:\n                    type: string\n                    example: http://localhost:9090/abc123\n                  originalUrl:\n                    type: string\n                    example: https://example.com/very/long/path\n        '400':\n          description: Invalid URL\n  /api/stats/{shortCode}:\n    get:\n      summary: Get click statistics for a short link\n      parameters:\n        - name: shortCode\n          in: path\n          required: true\n          schema:\n            type: string\n      responses:\n        '200':\n          description: Statistics retrieved\n          content:\n            application/json:\n              schema:\n                type: object\n                properties:\n                  shortCode:\n                    type: string\n                    example: abc123\n                  originalUrl:\n                    type: string\n                    example: https://example.com/very/long/path\n                  clickCount:\n                    type: integer\n                    example: 42\n                  lastAccessed:\n                    type: string\n                    format: date-time\n                    example: 2023-10-15T14:30:00Z\n        '404':\n          description: Short code not found\n  /{shortCode}:\n    get:\n      summary: Redirect to original URL\n      parameters:\n        - name: shortCode\n          in: path\n          required: true\n          schema:\n            type: string\n      responses:\n        '302':\n          description: Redirect to original URL\n          headers:\n            Location:\n              schema:\n                type: string\n                example: https://example.com/very/long/path\n        '404':\n          description: Short code not found",
+      "componentAgentInstructions": "Implement a Go HTTP service using net/http. Listen on port 9090. Use an in-memory map (sync.Map or mutex-protected map[string]*Link) to store links. Each Link struct has: OriginalURL (string), ShortCode (string), ClickCount (int64), CreatedAt (time.Time), LastAccessed (time.Time). POST /api/shorten: parse JSON body, validate URL format, generate a random 6-character alphanumeric shortCode (check for collisions), store the link, return JSON with shortCode, shortUrl (constructed as http://HOST:9090/{shortCode}), and originalUrl. GET /{shortCode}: lookup the shortCode, increment ClickCount, update LastAccessed to time.Now(), respond with 302 redirect to OriginalURL. If not found, return 404. GET /api/stats/{shortCode}: lookup and return JSON with shortCode, originalUrl, clickCount, lastAccessed in ISO8601 format. If not found, return 404. GET /health: return {\"status\":\"ok\"} with 200. Use CORS middleware to allow requests from the frontend. Dockerfile: multi-stage build with golang:1.21 for build, scratch or alpine for runtime. Copy binary and expose port 9090. Set environment variable PORT=9090. Handle graceful shutdown on SIGTERM/SIGINT."
+    },
+    {
+      "name": "link-cleanup-job",
+      "componentType": "scheduled-task",
+      "language": "Go",
+      "dependsOn": [
+        "url-shortener-api"
+      ],
+      "entrypoint": "cronjob/scheduled-task",
+      "buildpack": "docker",
+      "appPath": "/link-cleanup-job",
+      "openAPISpec": "openapi: 3.0.3\ninfo:\n  title: Link Cleanup Job\n  version: 1.0.0\n  description: Scheduled task to delete stale short links\npaths:\n  /health:\n    get:\n      summary: Health check\n      responses:\n        '200':\n          description: Service is healthy\n          content:\n            application/json:\n              schema:\n                type: object\n                properties:\n                  status:\n                    type: string\n                    example: ok",
+      "componentAgentInstructions": "Implement a Go command-line application that runs as a Kubernetes CronJob. The job calls the url-shortener-api backend to identify and delete stale links. Environment variable API_BASE_URL points to the backend (default http://url-shortener-api:9090). Environment variable STALE_DAYS defines the threshold (default 30 days). On execution: (1) GET /api/stats from a new endpoint on the backend that lists all links with their lastAccessed timestamps (you may need to extend the backend API or use a shared database). For simplicity, assume the backend exposes GET /api/admin/links returning JSON array of all links. (2) For each link where lastAccessed is older than STALE_DAYS, send DELETE /api/admin/links/{shortCode} to the backend. (3) Log the number of links deleted. Exit with code 0 on success. Dockerfile: multi-stage build with golang:1.21, copy binary to scratch or alpine. The binary is the entrypoint. No long-running HTTP server. For the /health endpoint requirement, include a minimal HTTP server on port 8080 that responds to GET /health with {\"status\":\"ok\"}, but the main logic is the cleanup task. Use a goroutine for the HTTP server and run cleanup in main, or structure as a CLI tool where health is optional. Since this is a CronJob, Kubernetes won't query /health during execution, so you may omit the HTTP server and just implement the cleanup logic. If required, add a simple HTTP server that starts, runs cleanup, then exits."
+    }
+  ],
+  "sourceSpec": "spec-v1"
+}
