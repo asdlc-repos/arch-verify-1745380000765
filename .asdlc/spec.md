@@ -13,4 +13,5 @@ A URL shortener that lets people create short links through a. web interface or 
 - The API accepts a long URL and returns a short link in JSON format.
 - Short links that haven't been used in a while get automatically deleted.
 - People can see basic stats about their short link, like how many times it's been clicked.
+- Users can set an expiry date on their short links.
 
